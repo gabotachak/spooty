@@ -1,16 +1,149 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import * as fs from 'fs';
+import * as path from 'path';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const fetch = require('isomorphic-unfetch');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { getDetails } = require('spotify-url-info')(fetch);
 
 @Injectable()
-export class SpotifyApiService {
+export class SpotifyApiService implements OnModuleInit {
   private readonly logger = new Logger(SpotifyApiService.name);
   private accessToken: string | null = null;
   private tokenExpiry: number = 0;
+  private userAccessToken: string | null = null;
+  private userTokenExpiry: number = 0;
+  private userRefreshToken: string | null = null;
 
   constructor() {}
+
+  async onModuleInit(): Promise<void> {
+    await this.loadTokensFromFile();
+  }
+
+  private getTokenFilePath(): string {
+    const dbPath = process.env.DB_PATH || './config/db.sqlite';
+    return path.join(path.dirname(dbPath), 'spotify_tokens.json');
+  }
+
+  private async loadTokensFromFile(): Promise<void> {
+    try {
+      const filePath = this.getTokenFilePath();
+      if (fs.existsSync(filePath)) {
+        const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+        this.userAccessToken = data.accessToken || null;
+        this.userTokenExpiry = data.tokenExpiry || 0;
+        this.userRefreshToken = data.refreshToken || null;
+        this.logger.debug('Loaded Spotify OAuth tokens from file');
+      }
+    } catch (err) {
+      this.logger.warn(`Failed to load Spotify tokens: ${err.message}`);
+    }
+  }
+
+  private saveTokensToFile(): void {
+    try {
+      const filePath = this.getTokenFilePath();
+      fs.writeFileSync(filePath, JSON.stringify({
+        accessToken: this.userAccessToken,
+        tokenExpiry: this.userTokenExpiry,
+        refreshToken: this.userRefreshToken,
+      }));
+    } catch (err) {
+      this.logger.warn(`Failed to save Spotify tokens: ${err.message}`);
+    }
+  }
+
+  hasUserToken(): boolean {
+    return !!(this.userAccessToken || this.userRefreshToken);
+  }
+
+  getAuthUrl(): string {
+    const clientId = process.env.SPOTIFY_CLIENT_ID;
+    const redirectUri = process.env.SPOTIFY_REDIRECT_URI || 'http://127.0.0.1:3000/api/callback';
+    const params = new URLSearchParams({
+      client_id: clientId,
+      response_type: 'code',
+      redirect_uri: redirectUri,
+      scope: 'playlist-read-private playlist-read-collaborative',
+    });
+    return `https://accounts.spotify.com/authorize?${params.toString()}`;
+  }
+
+  async handleOAuthCallback(code: string): Promise<void> {
+    const clientId = process.env.SPOTIFY_CLIENT_ID;
+    const clientSecret = process.env.SPOTIFY_CLIENT_SECRET;
+    const redirectUri = process.env.SPOTIFY_REDIRECT_URI || 'http://127.0.0.1:3000/api/callback';
+    const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+
+    const response = await fetch('https://accounts.spotify.com/api/token', {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${credentials}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: redirectUri,
+      }).toString(),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      throw new Error(`OAuth token exchange failed: ${errorData}`);
+    }
+
+    const data = await response.json();
+    this.userAccessToken = data.access_token;
+    this.userRefreshToken = data.refresh_token;
+    this.userTokenExpiry = Date.now() + data.expires_in * 1000 - 60000;
+    this.saveTokensToFile();
+    this.logger.debug('Successfully obtained Spotify OAuth tokens');
+  }
+
+  private async getUserAccessToken(): Promise<string> {
+    if (this.userAccessToken && Date.now() < this.userTokenExpiry) {
+      return this.userAccessToken;
+    }
+    if (this.userRefreshToken) {
+      return this.refreshUserToken();
+    }
+    throw new Error('No Spotify user token available — connect via /api/spotify/auth');
+  }
+
+  private async refreshUserToken(): Promise<string> {
+    const clientId = process.env.SPOTIFY_CLIENT_ID;
+    const clientSecret = process.env.SPOTIFY_CLIENT_SECRET;
+    const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+
+    const response = await fetch('https://accounts.spotify.com/api/token', {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${credentials}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: this.userRefreshToken,
+      }).toString(),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Token refresh failed: ${errorText}`);
+    }
+
+    const data = await response.json();
+    this.userAccessToken = data.access_token;
+    this.userTokenExpiry = Date.now() + data.expires_in * 1000 - 60000;
+    if (data.refresh_token) {
+      this.userRefreshToken = data.refresh_token;
+    }
+    this.saveTokensToFile();
+    this.logger.debug('Refreshed Spotify OAuth token');
+    return this.userAccessToken;
+  }
 
   private getPlaylistId(url: string): string {
     try {
@@ -159,90 +292,81 @@ export class SpotifyApiService {
 
       const playlistId = this.getPlaylistId(spotifyUrl);
       this.logger.debug(`Extracted playlist ID: ${playlistId}`);
-      
-      const accessToken = await this.getAccessToken();
+
+      const usingUserToken = this.hasUserToken();
+      this.logger.debug(`getAllPlaylistTracks: using ${usingUserToken ? 'user OAuth' : 'client credentials'} token`);
+      const accessToken = usingUserToken
+        ? await this.getUserAccessToken()
+        : await this.getAccessToken();
 
       const allTracks = [];
-      let offset = 0;
-      let hasMoreTracks = true;
+      let nextUrl: string | null =
+        `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=100`;
 
-      while (hasMoreTracks) {
-          this.logger.debug(
-            `Fetching tracks from Spotify API with offset ${offset}`,
-          );
+      while (nextUrl) {
+        this.logger.debug(`Fetching tracks from ${nextUrl}`);
 
-          const response = await fetch(
-            `https://api.spotify.com/v1/playlists/${playlistId}/tracks?offset=${offset}&limit=100&fields=items(track(id,name,artists,preview_url,album(images))),next`,
-            {
-              headers: {
-                Authorization: `Bearer ${accessToken}`,
-              },
-            },
-          );
+        const response = await fetch(nextUrl, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
 
-          if (!response.ok) {
-            const errorText = await response.text();
-            this.logger.error(
-              `Spotify API error: ${response.status} ${errorText}`,
-            );
-            throw new Error(`Failed to fetch tracks: ${response.status}`);
-          }
-
-          const data = await response.json();
-
-          if (!data.items || data.items.length === 0) {
-            this.logger.debug('No more tracks to fetch from Spotify API');
-            hasMoreTracks = false;
-            continue;
-          }
-
-          const pageTracks = data.items
-            .map(
-              (item: {
-                track: {
-                  id: string;
-                  name: any;
-                  artists: any[];
-                  preview_url: any;
-                  track_number: number;
-                  album: { images: any[]; name: string; release_date: string };
-                };
-              }) => {
-                if (!item.track) return null;
-
-                return {
-                  id: item.track.id,
-                  name: item.track.name,
-                  artist: item.track.artists.map((a: any) => a.name).join(', '),
-                  previewUrl: item.track.preview_url,
-                  coverUrl: item.track.album?.images?.[0]?.url || null,
-                  album: item.track.album?.name || null,
-                  year: item.track.album?.release_date?.substring(0, 4) || null,
-                  trackNumber: item.track.track_number || null,
-                };
-              },
-            )
-            .filter((track) => track !== null);
-
-          this.logger.debug(
-            `Retrieved ${pageTracks.length} tracks from Spotify API at offset ${offset}`,
-          );
-
-          if (pageTracks.length > 0) {
-            allTracks.push(...pageTracks);
-          }
-
-          if (!data.next) {
-            hasMoreTracks = false;
-          } else {
-            offset += 100;
-          }
+        this.logger.debug(`Spotify tracks API response: ${response.status}`);
+        if (!response.ok) {
+          const errorText = await response.text();
+          this.logger.error(`Spotify API error: ${response.status} ${errorText}`);
+          throw new Error(`Failed to fetch tracks: ${response.status} — ${usingUserToken ? 'user token' : 'client credentials'}`);
         }
 
+        const data = await response.json();
+
+        if (!data.items || data.items.length === 0) {
+          this.logger.debug('No more tracks to fetch from Spotify API');
+          break;
+        }
+
+        const pageTracks = data.items
+          .map(
+            (item: {
+              track: {
+                id: string;
+                name: any;
+                artists: any[];
+                preview_url: any;
+                track_number: number;
+                album: { images: any[]; name: string; release_date: string };
+              };
+            }) => {
+              if (!item.track) return null;
+
+              return {
+                id: item.track.id,
+                name: item.track.name,
+                artist: item.track.artists.map((a: any) => a.name).join(', '),
+                previewUrl: item.track.preview_url,
+                coverUrl: item.track.album?.images?.[0]?.url || null,
+                album: item.track.album?.name || null,
+                year: item.track.album?.release_date?.substring(0, 4) || null,
+                trackNumber: item.track.track_number || null,
+              };
+            },
+          )
+          .filter((track) => track !== null);
+
         this.logger.debug(
-          `Total tracks retrieved from Spotify API: ${allTracks.length}`,
+          `Retrieved ${pageTracks.length} tracks (total so far: ${allTracks.length + pageTracks.length})`,
         );
-        return allTracks;
+
+        if (pageTracks.length > 0) {
+          allTracks.push(...pageTracks);
+        }
+
+        nextUrl = data.next ?? null;
+      }
+
+      this.logger.debug(
+        `Total tracks retrieved from Spotify API: ${allTracks.length}`,
+      );
+      return allTracks;
     } catch (error) {
       this.logger.error(`Failed to get all playlist tracks: ${error.message}`);
       throw error;

@@ -5,6 +5,7 @@ import { TrackEntity, TrackStatusEnum } from './track.entity';
 import { PlaylistEntity } from '../playlist/playlist.entity';
 import { ConfigService } from '@nestjs/config';
 import { resolve } from 'path';
+import { rename } from 'fs/promises';
 import { WebSocketGateway, WebSocketServer } from '@nestjs/websockets';
 import { Server } from 'socket.io';
 import { EnvironmentEnum } from '../environmentEnum';
@@ -30,6 +31,7 @@ export class TrackService {
     private repository: Repository<TrackEntity>,
     @InjectQueue('track-download-processor') private trackDownloadQueue: Queue,
     @InjectQueue('track-search-processor') private trackSearchQueue: Queue,
+    @InjectQueue('track-bpm-processor') private trackBpmQueue: Queue,
     private readonly configService: ConfigService,
     private readonly utilsService: UtilsService,
     private readonly youtubeService: YoutubeService,
@@ -134,9 +136,9 @@ export class TrackService {
     });
     let error: string;
     try {
-      const folderName = this.getFolderName(track, track.playlist);
-      await this.youtubeService.downloadAndFormat(track, folderName);
-      await this.youtubeService.addMetadata(folderName, {
+      const downloadPath = this.getFolderName(track, track.playlist);
+      await this.youtubeService.downloadAndFormat(track, downloadPath);
+      await this.youtubeService.addMetadata(downloadPath, {
         title: track.name,
         artist: track.artist,
         album: track.album || undefined,
@@ -154,6 +156,34 @@ export class TrackService {
       ...(error ? { error } : {}),
     };
     await this.update(track.id, updatedTrack);
+    if (!error) {
+      try {
+        await this.trackBpmQueue.add('', track, { jobId: `bpm-${track.id}` });
+      } catch (err) {
+        this.logger.warn(`Failed to enqueue BPM job for track ${track.id}: ${err.message}`);
+      }
+    }
+  }
+
+  async detectAndApplyBpm(track: TrackEntity): Promise<void> {
+    const fullTrack = await this.get(track.id);
+    if (!fullTrack) return;
+
+    const currentPath = this.getFolderName({ ...fullTrack, bpm: undefined }, fullTrack.playlist);
+    const bpm = await this.youtubeService.detectBpm(currentPath);
+    if (!bpm) return;
+
+    const newPath = this.getFolderName({ ...fullTrack, bpm }, fullTrack.playlist);
+    try {
+      if (currentPath !== newPath) {
+        await rename(currentPath, newPath);
+      }
+      this.youtubeService.updateBpmTag(newPath, bpm);
+    } catch (err) {
+      this.logger.warn(`BPM post-processing failed for track ${fullTrack.id}: ${err.message}`);
+      return;
+    }
+    await this.update(fullTrack.id, { ...fullTrack, bpm, status: TrackStatusEnum.CompletedBpm });
   }
 
   getTrackFileName(track: TrackEntity): string {
@@ -169,7 +199,8 @@ export class TrackService {
     const artist = sanitize(track.artist || 'unknown artist');
     const name = sanitize(track.name || 'unknown track');
     const format = this.configService.get<string>(EnvironmentEnum.FORMAT);
-    return `${name} - ${artist}.${format}`;
+    const bpmSuffix = track.bpm ? ` - ${track.bpm}bpm` : '';
+    return `${name} - ${artist}${bpmSuffix}.${format}`;
   }
 
   private getYoutubeThumbnail(youtubeUrl: string): string | null {

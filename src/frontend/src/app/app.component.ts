@@ -4,7 +4,8 @@ import {CommonModule, NgFor} from "@angular/common";
 import {PlaylistService, PlaylistStatusEnum} from "./services/playlist.service";
 import {PlaylistBoxComponent} from "./components/playlist-box/playlist-box.component";
 import {VersionService} from "./services/version.service";
-import {map} from "rxjs";
+import {map, catchError, of, startWith} from "rxjs";
+import {HttpClient} from "@angular/common/http";
 
 @Component({
     selector: 'app-root',
@@ -25,10 +26,16 @@ export class AppComponent {
   playlists$ = this.playlistService.all$.pipe(map(items => items.filter(item => !item.isTrack)));
   songs$ = this.playlistService.all$.pipe(map(items => items.filter(item => item.isTrack)));
   version = this.versionService.getVersion();
+  spotifyConnected$ = this.http.get<{ connected: boolean }>('/api/spotify/status').pipe(
+    map(r => r.connected),
+    catchError(() => of(false)),
+    startWith(null),
+  );
 
   constructor(
     private readonly playlistService: PlaylistService,
     private readonly versionService: VersionService,
+    private readonly http: HttpClient,
   ) {
     this.fetchPlaylists();
   }

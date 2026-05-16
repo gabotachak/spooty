@@ -8,6 +8,7 @@ export interface Track {
   playlistId?: number;
   error?: string;
   coverUrl?: string;
+  bpm?: number;
 }
 
 export enum TrackStatusEnum {
@@ -17,4 +18,5 @@ export enum TrackStatusEnum {
   Downloading,
   Completed,
   Error,
+  CompletedBpm,
 }

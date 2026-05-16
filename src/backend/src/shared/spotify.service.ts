@@ -38,35 +38,44 @@ export class SpotifyService {
   ): Promise<{ name: string; tracks: any[]; image: string }> {
     this.logger.debug(`Get playlist ${spotifyUrl} on Spotify`);
 
+    // Metadata and tracks fetched independently so one failure doesn't block the other
+    let metadata: { name: string; image: string } | null = null;
     try {
-      const metadata =
-        await this.spotifyApiService.getPlaylistMetadata(spotifyUrl);
-
-      const tracks =
-        await this.spotifyApiService.getAllPlaylistTracks(spotifyUrl);
-
-      return {
-        name: metadata.name,
-        tracks: tracks || [],
-        image: metadata.image,
-      };
-    } catch (error) {
-      this.logger.error(`Error getting playlist details: ${error.message}`);
-      const detail = await getDetails(spotifyUrl);
-      const rawTracks = detail?.tracks ?? [];
-      const tracks = await Promise.all(
-        rawTracks.map(async (t: any) => {
-          if (!t.artist || !t.name) return t;
-          const meta = await this.spotifyApiService.searchTrackMetadata(t.artist, t.name);
-          return { ...t, ...meta };
-        }),
-      );
-      return {
-        name: detail.preview.title,
-        tracks,
-        image: detail.preview.image,
-      };
+      metadata = await this.spotifyApiService.getPlaylistMetadata(spotifyUrl);
+    } catch (metaError) {
+      this.logger.warn(`Playlist metadata fetch failed: ${metaError.message}`);
     }
+
+    // Try direct Spotify API (supports unlimited tracks when OAuth connected)
+    try {
+      const tracks = await this.spotifyApiService.getAllPlaylistTracks(spotifyUrl);
+      this.logger.debug(`Direct API returned ${tracks.length} tracks`);
+
+      if (metadata) {
+        return { name: metadata.name, tracks, image: metadata.image };
+      }
+      // metadata failed — get name/image from spotify-url-info only
+      const detail = await getDetails(spotifyUrl);
+      return { name: detail.preview.title, tracks, image: detail.preview.image };
+    } catch (tracksError) {
+      this.logger.warn(`Direct API track fetch failed (${tracksError.message}), falling back to spotify-url-info (100-track limit)`);
+    }
+
+    // Full fallback — capped at ~100 tracks
+    const detail = await getDetails(spotifyUrl);
+    const rawTracks = detail?.tracks ?? [];
+    const tracks = await Promise.all(
+      rawTracks.map(async (t: any) => {
+        if (!t.artist || !t.name) return t;
+        const meta = await this.spotifyApiService.searchTrackMetadata(t.artist, t.name);
+        return { ...t, ...meta };
+      }),
+    );
+    return {
+      name: metadata?.name ?? detail.preview.title,
+      tracks,
+      image: metadata?.image ?? detail.preview.image,
+    };
   }
 
   async getPlaylistTracks(spotifyUrl: string): Promise<any[]> {

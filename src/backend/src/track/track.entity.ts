@@ -8,6 +8,7 @@ export enum TrackStatusEnum {
   Downloading,
   Completed,
   Error,
+  CompletedBpm,
 }
 
 @Entity()
@@ -47,6 +48,9 @@ export class TrackEntity {
 
   @Column({ nullable: true })
   duration?: number;
+
+  @Column({ nullable: true })
+  bpm?: number;
 
   @Column({ default: Date.now() })
   createdAt?: number;

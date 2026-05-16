@@ -3,13 +3,13 @@ import { Job } from 'bullmq';
 import { TrackService } from './track.service';
 import { TrackEntity } from './track.entity';
 
-@Processor('track-download-processor')
-export class TrackDownloadProcessor extends WorkerHost {
+@Processor('track-bpm-processor', { concurrency: 8 })
+export class TrackBpmProcessor extends WorkerHost {
   constructor(private readonly trackService: TrackService) {
     super();
   }
 
   async process(job: Job<TrackEntity, void>): Promise<void> {
-    await this.trackService.downloadFromYoutube(job.data);
+    await this.trackService.detectAndApplyBpm(job.data);
   }
 }

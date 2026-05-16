@@ -32,7 +32,10 @@ export class TrackService {
   }
 
   getCompletedByPlaylist(id: number): Observable<Track[]> {
-    return this.getAllByPlaylist(id, TrackStatusEnum.Completed);
+    return this.store.pipe(
+      selectManyByPredicate((track) => track?.playlistId === id),
+      map(data => data.filter(item => item.status === TrackStatusEnum.Completed || item.status === TrackStatusEnum.CompletedBpm)),
+    );
   }
 
   getErrorByPlaylist(id: number): Observable<Track[]> {

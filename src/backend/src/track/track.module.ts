@@ -8,6 +8,7 @@ import { SharedModule } from '../shared/shared.module';
 import { BullModule } from '@nestjs/bullmq';
 import { TrackDownloadProcessor } from './track-download.processor';
 import { TrackSearchProcessor } from './track-search.processor';
+import { TrackBpmProcessor } from './track-bpm.processor';
 
 @Module({
   imports: [
@@ -15,12 +16,13 @@ import { TrackSearchProcessor } from './track-search.processor';
     BullModule.registerQueue(
       { name: 'track-search-processor' },
       { name: 'track-download-processor' },
+      { name: 'track-bpm-processor' },
     ),
     ConfigModule,
     SharedModule,
   ],
-  providers: [TrackService, TrackDownloadProcessor, TrackSearchProcessor],
+  providers: [TrackService, TrackDownloadProcessor, TrackSearchProcessor, TrackBpmProcessor],
   controllers: [TrackController],
   exports: [TrackService],
 })
-export class TrackModule {}
+export class TrackModule { }

@@ -1,11 +1,23 @@
 <section class="hero is-primary">
   <div class="hero-body">
-    <p class="title">
-      <i class="fa-brands fa-spotify"></i>
-      <span>Spooty</span>
-      <span class="tag is-dark is-size-7">v{{version}}</span>
-    </p>
-    <p class="subtitle">Self-hosted spotify downloader</p>
+    <div class="is-flex is-justify-content-space-between is-align-items-flex-start">
+      <div>
+        <p class="title">
+          <i class="fa-brands fa-spotify"></i>
+          <span>Spooty</span>
+          <span class="tag is-dark is-size-7">v{{version}}</span>
+        </p>
+        <p class="subtitle">Self-hosted spotify downloader</p>
+      </div>
+      <ng-container *ngIf="spotifyConnected$ | async as status">
+        <span *ngIf="status === true" class="tag is-success is-medium">
+          <i class="fa-brands fa-spotify" style="margin-right:6px"></i> Spotify connected
+        </span>
+        <a *ngIf="status === false" href="/api/spotify/auth" class="button is-dark">
+          <i class="fa-brands fa-spotify" style="margin-right:6px"></i> Connect Spotify
+        </a>
+      </ng-container>
+    </div>
   </div>
 </section>
 

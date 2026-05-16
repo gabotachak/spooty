@@ -5,7 +5,11 @@ import { TrackService } from '../track/track.service';
 import { ConfigService } from '@nestjs/config';
 import { YtDlp } from 'ytdlp-nodejs';
 import * as fs from 'fs';
+import { spawn } from 'child_process';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
 const NodeID3 = require('node-id3');
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const MusicTempo = require('music-tempo');
 
 const HEADERS = {
   'User-Agent':
@@ -95,6 +99,49 @@ export class YoutubeService {
     this.logger.debug(
       `Downloaded ${track.artist} - ${track.name} to ${output}`,
     );
+  }
+
+  async detectBpm(filePath: string): Promise<number | undefined> {
+    try {
+      const pcmBuffer = await this.decodeToPcm(filePath);
+      const floatArray = new Float32Array(
+        pcmBuffer.buffer,
+        pcmBuffer.byteOffset,
+        pcmBuffer.byteLength / 4,
+      );
+      const mt = new MusicTempo(floatArray);
+      const bpm = Math.round(mt.tempo);
+      this.logger.debug(`BPM detected: ${bpm} for ${filePath}`);
+      return bpm;
+    } catch (err) {
+      this.logger.warn(`BPM detection failed: ${err.message}`);
+      return undefined;
+    }
+  }
+
+  private decodeToPcm(filePath: string): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      const proc = spawn('ffmpeg', [
+        '-i', filePath,
+        '-f', 'f32le',
+        '-acodec', 'pcm_f32le',
+        '-ar', '22050',
+        '-ac', '1',
+        'pipe:1',
+      ]);
+      proc.stdout.on('data', (chunk: Buffer) => chunks.push(chunk));
+      proc.stderr.on('data', () => {});
+      proc.on('close', (code: number) => {
+        if (code === 0) resolve(Buffer.concat(chunks));
+        else reject(new Error(`ffmpeg exited with code ${code}`));
+      });
+      proc.on('error', reject);
+    });
+  }
+
+  updateBpmTag(filePath: string, bpm: number): void {
+    NodeID3.update({ bpm: String(bpm) }, filePath);
   }
 
   async addMetadata(

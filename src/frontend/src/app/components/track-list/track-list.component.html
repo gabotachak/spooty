@@ -11,7 +11,7 @@
        class="has-text-danger is-color-black" title="Youtube searched track that will be downloaded">
       <i class="fa-brands fa-youtube"></i>
     </a>&nbsp;
-    <a *ngIf="track.status === trackStatuses.Completed"
+    <a *ngIf="track.status === trackStatuses.Completed || track.status === trackStatuses.CompletedBpm"
        href="api/track/download/{{track.id}}"
        class="has-text-info"
        title="Download downloaded and locally saved file"
@@ -29,6 +29,7 @@
       <span *ngSwitchCase="trackStatuses.Downloading" class="tag is-warning">Downloading</span>
       <span *ngSwitchCase="trackStatuses.Completed" class="tag is-success">Completed</span>
       <span *ngSwitchCase="trackStatuses.Error" class="tag is-danger" [title]="track.error">Error</span>
+      <span *ngSwitchCase="trackStatuses.CompletedBpm" class="tag is-primary" title="BPM detected and embedded in file">{{ track.bpm }} BPM</span>
     </ng-container>
   </div>
 </a>

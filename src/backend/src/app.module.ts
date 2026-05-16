@@ -11,6 +11,7 @@ import { PlaylistEntity } from './playlist/playlist.entity';
 import { resolve } from 'path';
 import { EnvironmentEnum } from './environmentEnum';
 import { BullModule } from '@nestjs/bullmq';
+import { SharedModule } from './shared/shared.module';
 
 @Module({
   imports: [
@@ -55,6 +56,7 @@ import { BullModule } from '@nestjs/bullmq';
       }),
       inject: [ConfigService],
     }),
+    SharedModule,
     TrackModule,
     PlaylistModule,
   ],
