@@ -90,6 +90,7 @@ export class TrackService {
       const youtubeUrl = await this.youtubeService.findOnYoutubeOne(
         track.artist,
         track.name,
+        track.duration,
       );
       updatedTrack = { ...track, youtubeUrl, status: TrackStatusEnum.Queued };
     } catch (err) {
@@ -120,8 +121,8 @@ export class TrackService {
       );
       return;
     }
-    // Use track's own coverUrl if available, otherwise fall back to playlist coverUrl
-    const coverUrl = track.coverUrl || track.playlist.coverUrl;
+    this.logger.debug(`Track metadata: album=${track.album} year=${track.year} coverUrl=${track.coverUrl}`);
+    const coverUrl = track.coverUrl || this.getYoutubeThumbnail(track.youtubeUrl) || track.playlist.coverUrl;
     if (!coverUrl) {
       this.logger.warn(
         `No cover art available for track: ${track.artist} - ${track.name}`,
@@ -135,14 +136,14 @@ export class TrackService {
     try {
       const folderName = this.getFolderName(track, track.playlist);
       await this.youtubeService.downloadAndFormat(track, folderName);
-      if (coverUrl) {
-        await this.youtubeService.addImage(
-          folderName,
-          coverUrl,
-          track.name,
-          track.artist,
-        );
-      }
+      await this.youtubeService.addMetadata(folderName, {
+        title: track.name,
+        artist: track.artist,
+        album: track.album || undefined,
+        year: track.year || undefined,
+        trackNumber: track.trackNumber || undefined,
+        coverUrl,
+      });
     } catch (err) {
       this.logger.error(err);
       error = String(err);
@@ -156,10 +157,29 @@ export class TrackService {
   }
 
   getTrackFileName(track: TrackEntity): string {
-    const safeArtist = track.artist || 'unknown_artist';
-    const safeName = (track.name || 'unknown_track').replace('/', '');
-    const fileName = `${safeArtist} - ${safeName}`;
-    return `${this.utilsService.stripFileIllegalChars(fileName)}.${this.configService.get<string>(EnvironmentEnum.FORMAT)}`;
+    const sanitize = (s: string) =>
+      s
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9\s-]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    const artist = sanitize(track.artist || 'unknown artist');
+    const name = sanitize(track.name || 'unknown track');
+    const format = this.configService.get<string>(EnvironmentEnum.FORMAT);
+    return `${name} - ${artist}.${format}`;
+  }
+
+  private getYoutubeThumbnail(youtubeUrl: string): string | null {
+    try {
+      const match = youtubeUrl?.match(/[?&]v=([^&]+)/);
+      const videoId = match?.[1];
+      return videoId ? `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg` : null;
+    } catch {
+      return null;
+    }
   }
 
   getFolderName(track: TrackEntity, playlist: PlaylistEntity): string {

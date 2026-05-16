@@ -40,7 +40,9 @@ To fully use Spooty, you need to create an application in the Spotify Developer 
 2. Sign in with your Spotify account
 3. Create a new application
 4. Note your `Client ID` and `Client Secret`
-5. Configure the redirect URI to `http://127.0.0.1:3000/api/callback` (or the corresponding URL of your instance)
+
+> [!NOTE]
+> Spooty uses the **Client Credentials** OAuth flow — no redirect URI or user login is required. You can leave the redirect URI field blank or set any value; it is not used.
 
 These credentials will be used by Spooty to access the Spotify API.
 
@@ -152,6 +154,48 @@ Bind mount the `cookies.txt` file into the container and set `YT_COOKIES_FILE` t
 
 > [!NOTE]
 > `YT_COOKIES` takes priority over `YT_COOKIES_FILE` if both are set.
+
+## 🎵 Behavior and expected output
+
+### File naming
+
+Downloaded files are named: `<track name> - <artist>.<format>`
+
+Characters are sanitized (lowercased, accents stripped, only a-z, 0-9, spaces and hyphens kept).
+
+### File location
+
+- **Playlist/album**: `<DOWNLOADS_PATH>/<playlist name>/<track name> - <artist>.<format>`
+- **Single track**: `<DOWNLOADS_PATH>/<track name> - <artist>.<format>`
+
+### Metadata (ID3 tags)
+
+Each downloaded file gets the following tags written from Spotify data:
+
+| Tag | Source |
+|-----|--------|
+| Title | Spotify track name |
+| Artist | Spotify artist(s) |
+| Album | Spotify album name |
+| Year | Spotify release year |
+| Track number | Spotify track number |
+| Cover art (APIC) | Spotify per-track cover image |
+
+Cover art is always sourced per-track from Spotify. The playlist cover is never used as a fallback for individual track art (except as a last resort if Spotify returns no per-track image).
+
+### YouTube search strategy
+
+Spooty searches YouTube for each track using `yt-dlp` and picks the best match:
+
+1. **Preferred**: results from YouTube "Topic" channels (official audio uploads) within 30 seconds of the Spotify track duration
+2. **Fallback**: result with duration closest to the Spotify track duration
+3. **Last resort**: first search result
+
+This avoids music videos and live versions by using the Spotify duration as a reference.
+
+### Local development
+
+For running outside Docker, set an absolute `DB_PATH` (e.g. `~/.config/spooty/db.sqlite`) so the SQLite file is not owned by a previous Docker run. After resetting the database, run `redis-cli FLUSHALL` to clear stale BullMQ jobs.
 
 # ⚖️ License
 [MIT](https://choosealicense.com/licenses/mit/)

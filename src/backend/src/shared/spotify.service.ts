@@ -18,7 +18,7 @@ export class SpotifyService {
 
   async getTrackDetail(
     spotifyUrl: string,
-  ): Promise<{ name: string; artist: string; image: string }> {
+  ): Promise<{ name: string; artist: string; image: string; album?: string; year?: string; trackNumber?: number; duration?: number }> {
     this.logger.debug(`Get track ${spotifyUrl} on Spotify`);
     try {
       return await this.spotifyApiService.getTrackMetadata(spotifyUrl);
@@ -53,9 +53,17 @@ export class SpotifyService {
     } catch (error) {
       this.logger.error(`Error getting playlist details: ${error.message}`);
       const detail = await getDetails(spotifyUrl);
+      const rawTracks = detail?.tracks ?? [];
+      const tracks = await Promise.all(
+        rawTracks.map(async (t: any) => {
+          if (!t.artist || !t.name) return t;
+          const meta = await this.spotifyApiService.searchTrackMetadata(t.artist, t.name);
+          return { ...t, ...meta };
+        }),
+      );
       return {
         name: detail.preview.title,
-        tracks: detail?.tracks ?? [],
+        tracks,
         image: detail.preview.image,
       };
     }

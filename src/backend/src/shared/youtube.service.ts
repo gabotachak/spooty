@@ -4,7 +4,6 @@ import { EnvironmentEnum } from '../environmentEnum';
 import { TrackService } from '../track/track.service';
 import { ConfigService } from '@nestjs/config';
 import { YtDlp } from 'ytdlp-nodejs';
-import * as yts from 'yt-search';
 import * as fs from 'fs';
 const NodeID3 = require('node-id3');
 
@@ -19,10 +18,36 @@ export class YoutubeService {
 
   constructor(private readonly configService: ConfigService) {}
 
-  async findOnYoutubeOne(artist: string, name: string): Promise<string> {
+  async findOnYoutubeOne(artist: string, name: string, expectedDuration?: number): Promise<string> {
     this.logger.debug(`Searching ${artist} - ${name} on YT`);
-    const url = (await yts(`${artist} - ${name}`)).videos[0].url;
-    this.logger.debug(`Found ${artist} - ${name} on ${url}`);
+    const ytdlp = new YtDlp();
+    const info = await ytdlp.getInfoAsync(`ytsearch5:${artist} - ${name}`, {
+      ...this.getCookiesOptions(),
+      flatPlaylist: true,
+    } as any) as any;
+
+    const entries: any[] = info?.entries ?? [];
+    this.logger.debug(`Search results for ${artist} - ${name}: ${entries.map((e) => `${e.channel || e.uploader}(${e.duration}s)`).join(', ')}`);
+
+    const scored = entries.map((e) => {
+      const isTopic = e.channel?.endsWith('- Topic') || e.uploader?.endsWith('- Topic');
+      const durationDiff = expectedDuration && e.duration
+        ? Math.abs(e.duration - expectedDuration)
+        : 9999;
+      return { e, isTopic, durationDiff };
+    });
+
+    // Prefer Topic channel within 30s of expected duration, then closest duration overall
+    const topicMatch = scored.filter((s) => s.isTopic && s.durationDiff <= 30)
+      .sort((a, b) => a.durationDiff - b.durationDiff)[0];
+    const closestDuration = expectedDuration
+      ? scored.sort((a, b) => a.durationDiff - b.durationDiff)[0]
+      : null;
+    const chosen = (topicMatch ?? closestDuration ?? scored[0])?.e;
+
+    const rawUrl = chosen?.webpage_url ?? chosen?.url;
+    const url = rawUrl?.startsWith('http') ? rawUrl : `https://www.youtube.com/watch?v=${chosen?.id ?? rawUrl}`;
+    this.logger.debug(`Found ${artist} - ${name} on ${url} [diff=${closestDuration?.durationDiff}s topic=${!!topicMatch}]`);
     return url;
   }
 
@@ -72,30 +97,35 @@ export class YoutubeService {
     );
   }
 
-  async addImage(
-    folderName: string,
-    coverUrl: string,
-    title: string,
-    artist: string,
+  async addMetadata(
+    filePath: string,
+    meta: { title: string; artist: string; album?: string; year?: string; trackNumber?: number; coverUrl?: string },
   ): Promise<void> {
-    if (coverUrl) {
-      const res = await fetch(coverUrl);
-      const arrayBuf = await res.arrayBuffer();
-      const imageBuffer = Buffer.from(arrayBuf);
+    const tags: Record<string, any> = {
+      title: meta.title,
+      artist: meta.artist,
+      ...(meta.album ? { album: meta.album } : {}),
+      ...(meta.year ? { year: meta.year } : {}),
+      ...(meta.trackNumber ? { trackNumber: String(meta.trackNumber) } : {}),
+    };
 
-      NodeID3.write(
-        {
-          title,
-          artist,
-          APIC: {
+    if (meta.coverUrl) {
+      try {
+        const res = await fetch(meta.coverUrl);
+        if (res.ok) {
+          const arrayBuf = await res.arrayBuffer();
+          tags.APIC = {
             mime: 'image/jpeg',
             type: { id: 3, name: 'front cover' },
             description: 'cover',
-            imageBuffer,
-          },
-        },
-        folderName,
-      );
+            imageBuffer: Buffer.from(arrayBuf),
+          };
+        }
+      } catch {
+        this.logger.warn(`Failed to fetch cover: ${meta.coverUrl}`);
+      }
     }
+
+    NodeID3.write(tags, filePath);
   }
 }

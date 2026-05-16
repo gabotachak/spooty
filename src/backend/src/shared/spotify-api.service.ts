@@ -53,7 +53,7 @@ export class SpotifyApiService {
 
   async getTrackMetadata(
     spotifyUrl: string,
-  ): Promise<{ name: string; artist: string; image: string }> {
+  ): Promise<{ name: string; artist: string; image: string; album: string; year: string; trackNumber: number; duration: number }> {
     try {
       this.logger.debug(`Getting track metadata for ${spotifyUrl}`);
       const trackId = this.getTrackId(spotifyUrl);
@@ -76,8 +76,12 @@ export class SpotifyApiService {
 
       return {
         name: data.name,
-        artist: data.artists.map((a) => a.name).join(', '),
+        artist: data.artists.map((a: any) => a.name).join(', '),
         image: data.album.images[0]?.url || '',
+        album: data.album.name || '',
+        year: data.album.release_date?.substring(0, 4) || '',
+        trackNumber: data.track_number || 0,
+        duration: data.duration_ms ? Math.round(data.duration_ms / 1000) : null,
       };
     } catch (error) {
       this.logger.error(`Failed to get track metadata: ${error.message}`);
@@ -200,7 +204,8 @@ export class SpotifyApiService {
                   name: any;
                   artists: any[];
                   preview_url: any;
-                  album: { images: any[] };
+                  track_number: number;
+                  album: { images: any[]; name: string; release_date: string };
                 };
               }) => {
                 if (!item.track) return null;
@@ -208,9 +213,12 @@ export class SpotifyApiService {
                 return {
                   id: item.track.id,
                   name: item.track.name,
-                  artist: item.track.artists.map((a) => a.name).join(', '),
+                  artist: item.track.artists.map((a: any) => a.name).join(', '),
                   previewUrl: item.track.preview_url,
                   coverUrl: item.track.album?.images?.[0]?.url || null,
+                  album: item.track.album?.name || null,
+                  year: item.track.album?.release_date?.substring(0, 4) || null,
+                  trackNumber: item.track.track_number || null,
                 };
               },
             )
@@ -238,6 +246,42 @@ export class SpotifyApiService {
     } catch (error) {
       this.logger.error(`Failed to get all playlist tracks: ${error.message}`);
       throw error;
+    }
+  }
+
+  async searchTrackMetadata(
+    artist: string,
+    name: string,
+  ): Promise<{ coverUrl: string; album: string; year: string; trackNumber: number; duration: number } | null> {
+    try {
+      const accessToken = await this.getAccessToken();
+      const q = encodeURIComponent(`track:${name} artist:${artist}`);
+      const response = await fetch(
+        `https://api.spotify.com/v1/search?q=${q}&type=track&limit=1`,
+        { headers: { Authorization: `Bearer ${accessToken}` } },
+      );
+      if (!response.ok) {
+        this.logger.warn(`searchTrackMetadata ${artist} - ${name}: HTTP ${response.status}`);
+        return null;
+      }
+      const data = await response.json();
+      const track = data.tracks?.items?.[0];
+      if (!track) {
+        this.logger.warn(`searchTrackMetadata ${artist} - ${name}: no results`);
+        return null;
+      }
+      const result = {
+        coverUrl: track.album?.images?.[0]?.url || null,
+        album: track.album?.name || null,
+        year: track.album?.release_date?.substring(0, 4) || null,
+        trackNumber: track.track_number || null,
+        duration: track.duration_ms ? Math.round(track.duration_ms / 1000) : null,
+      };
+      this.logger.debug(`searchTrackMetadata ${artist} - ${name}: album=${result.album} year=${result.year}`);
+      return result;
+    } catch (err) {
+      this.logger.warn(`searchTrackMetadata ${artist} - ${name}: ${err.message}`);
+      return null;
     }
   }
 }

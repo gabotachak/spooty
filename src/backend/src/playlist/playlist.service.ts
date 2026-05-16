@@ -59,7 +59,7 @@ export class PlaylistService {
   }
 
   private async createSingleTrack(playlist: PlaylistEntity): Promise<void> {
-    let trackDetail: { name: string; artist: string; image: string };
+    let trackDetail: { name: string; artist: string; image: string; album?: string; year?: string; trackNumber?: number; duration?: number };
     let playlist2Save: PlaylistEntity;
     try {
       trackDetail = await this.spotifyService.getTrackDetail(
@@ -89,6 +89,10 @@ export class PlaylistService {
             name: trackDetail.name,
             spotifyUrl: playlist.spotifyUrl,
             coverUrl: trackDetail.image,
+            album: trackDetail.album || null,
+            year: trackDetail.year || null,
+            trackNumber: trackDetail.trackNumber || null,
+            duration: trackDetail.duration || null,
           },
           savedPlaylist,
         );
@@ -153,7 +157,11 @@ export class PlaylistService {
               artist: track.artist,
               name: track.name,
               spotifyUrl: track.previewUrl || null,
-              coverUrl: track.coverUrl || savedPlaylist.coverUrl, // Use track's album art, fallback to playlist cover
+              coverUrl: track.coverUrl || savedPlaylist.coverUrl,
+              album: track.album || null,
+              year: track.year || null,
+              trackNumber: track.trackNumber || null,
+              duration: track.duration || null,
             },
             savedPlaylist,
           );
